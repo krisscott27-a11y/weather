@@ -1,0 +1,21 @@
+name: Update tide tables
+on:
+  workflow_dispatch:
+  push:
+    paths: [".github/workflows/tides.yml", "scripts/tides.py"]
+  schedule:
+    - cron: "0 18 1 * *"   # 4am Brisbane time on the 1st of each month
+permissions:
+  contents: write
+jobs:
+  tides:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/tides.py
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898+github-actions[bot]@users.noreply.github.com"
+          git add tides.json
+          git diff --cached --quiet || (git commit -m "Update tide tables" && git push)
