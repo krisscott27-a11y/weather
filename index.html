@@ -149,6 +149,21 @@ button svg { width: 18px; height: 18px; }
 .rain-sum .k { font-size: .74rem; color: var(--ink-soft); }
 .day .rain { line-height: 1.15; }
 .day .rain small { display: block; font-weight: 500; color: var(--ink-soft); font-size: .66rem; }
+.tide-now { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.tide-now .state { font-family: var(--font-display); font-weight: 600; font-size: 1.4rem; }
+.tide-now .state small { font-family: var(--font-body); font-weight: 500; font-size: .8rem; color: var(--ink-soft); margin-left: 6px; }
+.tide-next { display: flex; gap: 18px; font-variant-numeric: tabular-nums; }
+.tide-next .k { font-size: .74rem; color: var(--ink-soft); }
+.tide-next .v { font-weight: 600; }
+.tide-curve { display: block; width: 100%; height: auto; margin-top: 10px; overflow: visible; }
+.tide-days { display: grid; grid-template-columns: 2.9rem repeat(4, minmax(0, 1fr)); gap: 10px 4px; margin-top: 12px; font-size: .8rem; font-variant-numeric: tabular-nums; align-items: start; }
+.tide-days .dn { font-weight: 600; font-size: .85rem; }
+.tide-days .ev { display: flex; flex-direction: column; white-space: nowrap; min-width: 0; }
+.tide-days .ev b { font-weight: 600; }
+.tide-days .ev.low { color: var(--ink-soft); }
+.tide-days .ev i { font-style: normal; font-size: .7rem; color: var(--ink-soft); }
+.tide-days .ev.high i { color: var(--cool); }
+.tide-src { font-size: .7rem; color: var(--ink-soft); margin-top: 10px; }
 .sun { display: flex; justify-content: space-between; gap: 12px; font-variant-numeric: tabular-nums; }
 .sun div { display: flex; align-items: center; gap: 8px; }
 .sun svg { width: 26px; height: 26px; }
@@ -379,6 +394,8 @@ button svg { width: 18px; height: 18px; }
         <div class="rain-axis"><span>Now</span><span>${timeFmt(rainHrs[12]?.t || rainHrs[0].t, { hour: "numeric" })}</span><span>${timeFmt(rainHrs[rainHrs.length - 1].t, { hour: "numeric" })}</span></div>
       </section>
 
+      <section class="panel" style="margin-top:14px" id="tides" hidden></section>
+
       <section class="panel" style="margin-top:14px">
         <h2>7-day forecast</h2>
         <ul class="days">${days}</ul>
@@ -401,6 +418,78 @@ button svg { width: 18px; height: 18px; }
         <div><span style="text-align:right"><span style="color:var(--ink-soft);font-size:.74rem">Sunset</span><br><b>${timeFmt(dl.sunset[0])}</b></span><svg viewBox="0 0 64 64">${MOON(30, 34, 12)}<line x1="8" y1="54" x2="56" y2="54" stroke="#fff" stroke-width="3" stroke-linecap="round"/></svg></div>
       </section>`;
     initRadar(lastPlace.lat, lastPlace.lon);
+    renderTides();
+  }
+
+  // Tides for Pelican Park, Redcliffe, from MSQ predictions at Shorncliffe pier (the nearest official gauge)
+  let tides = null;
+  fetch("tides.json", { cache: "no-cache" }).then(r => r.ok ? r.json() : null).then(j => {
+    if (!j?.events?.length) return;
+    tides = j.events.map(e => ({ at: new Date(e.t + ":00" + (j.tz || "+10:00")), h: e.h, high: e.type === "high" }));
+    renderTides();
+  }).catch(() => {});
+  function tideHeightAt(t) {
+    // Cosine interpolation between neighbouring high and low tides
+    const i = tides.findIndex(e => e.at > t); if (i <= 0) return null;
+    const a = tides[i - 1], b = tides[i], f = (t - a.at) / (b.at - a.at);
+    return a.h + (b.h - a.h) * (1 - Math.cos(Math.PI * f)) / 2;
+  }
+  function renderTides() {
+    const el = $("tides"); if (!el || !tides) return;
+    const now = new Date(), nextI = tides.findIndex(e => e.at > now);
+    if (nextI <= 0) { el.hidden = true; return; }
+    const next = tides[nextI], after = tides[nextI + 1], hNow = tideHeightAt(now);
+    const nextHigh = next.high ? next : after, nextLow = next.high ? after : next;
+    const tf = (d) => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const m = (v) => v.toFixed(1) + " m";
+    const untilMins = Math.round((next.at - now) / 60000), until = untilMins >= 60 ? `${Math.floor(untilMins / 60)} h ${untilMins % 60} min` : `${untilMins} min`;
+
+    // 24 hour curve from 3 hours ago
+    const W = 340, H = 110, padT = 18, padB = 22, t0 = new Date(now - 3 * 3600e3), t1 = new Date(+t0 + 24 * 3600e3);
+    const inWin = tides.filter(e => e.at >= new Date(+t0 - 12 * 3600e3) && e.at <= new Date(+t1 + 12 * 3600e3));
+    const hMax = Math.max(...inWin.map(e => e.h)) + .1, hMin = Math.min(0, ...inWin.map(e => e.h));
+    const x = (t) => (t - t0) / (t1 - t0) * W, y = (h) => padT + (1 - (h - hMin) / (hMax - hMin)) * (H - padT - padB);
+    let pts = []; for (let k = 0; k <= 96; k++) { const t = new Date(+t0 + k * 15 * 60e3), h = tideHeightAt(t); if (h != null) pts.push([x(t), y(h)]); }
+    const line = pts.map((p, k) => (k ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ");
+    const area = line + ` L${pts[pts.length - 1][0].toFixed(1)} ${H - padB} L${pts[0][0].toFixed(1)} ${H - padB} Z`;
+    const marks = tides.filter(e => e.at > t0 && e.at < t1).map(e => {
+      const ex = x(e.at), ey = y(e.h), anchor = ex < 30 ? "start" : ex > W - 30 ? "end" : "middle";
+      return `<circle cx="${ex.toFixed(1)}" cy="${ey.toFixed(1)}" r="3" fill="#fff"/><text x="${ex.toFixed(1)}" y="${(e.high ? ey - 7 : ey + 14).toFixed(1)}" text-anchor="${anchor}" font-size="10" fill="#fff" font-weight="600">${tf(e.at).replace(/\s?[ap]m$/i, m => m.trim().toLowerCase())}</text>`;
+    }).join("");
+    const nx = x(now), ny = y(hNow);
+    const svg = `<svg class="tide-curve" viewBox="0 0 ${W} ${H}" aria-hidden="true">
+      <defs><linearGradient id="tg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7fd3ff" stop-opacity=".55"/><stop offset="1" stop-color="#7fd3ff" stop-opacity=".05"/></linearGradient></defs>
+      <path d="${area}" fill="url(#tg)"/><path d="${line}" fill="none" stroke="#7fd3ff" stroke-width="2.2"/>
+      <line x1="${nx.toFixed(1)}" y1="${padT - 6}" x2="${nx.toFixed(1)}" y2="${H - padB}" stroke="#fff" stroke-width="1.2" stroke-dasharray="3 3" opacity=".8"/>
+      <circle cx="${nx.toFixed(1)}" cy="${ny.toFixed(1)}" r="5" fill="#fff" stroke="#2f80ed" stroke-width="2"/>
+      ${marks}
+      
+    </svg>`;
+
+    // Next 4 days of highs and lows
+    const dayKey = (d) => d.toLocaleDateString("en-CA");
+    const today = new Date(now); today.setHours(0, 0, 0, 0);
+    let rows = "";
+    for (let k = 0; k < 4; k++) {
+      const d = new Date(+today + k * 864e5), evs = tides.filter(e => dayKey(e.at) === dayKey(d));
+      const cells = evs.slice(0, 4).map(e => `<span class="ev ${e.high ? "high" : "low"}"><b>${tf(e.at)}</b><i>${e.high ? "High" : "Low"} ${e.h.toFixed(1)} m</i></span>`);
+      while (cells.length < 4) cells.push("<span></span>");
+      rows += `<span class="dn">${k === 0 ? "Today" : d.toLocaleDateString([], { weekday: "short" })}</span>${cells.join("")}`;
+    }
+
+    el.innerHTML = `<h2>Tides · Pelican Park, Redcliffe</h2>
+      <div class="tide-now">
+        <div class="state">${next.high ? "Rising" : "Falling"}<small>${m(hNow)} now</small></div>
+        <div class="tide-next">
+          <div><div class="k">Next high</div><div class="v">${tf(nextHigh.at)} · ${m(nextHigh.h)}</div></div>
+          <div><div class="k">Next low</div><div class="v">${tf(nextLow.at)} · ${m(nextLow.h)}</div></div>
+        </div>
+      </div>
+      <div class="subline" style="font-size:.82rem;margin-top:4px">${next.high ? "High" : "Low"} tide in ${until} · dashed line is now</div>
+      ${svg}
+      <div class="tide-days">${rows}</div>
+      <div class="tide-src">Predicted times and heights (metres above lowest tide) for Shorncliffe pier, the nearest official gauge, about 5 km across Bramble Bay. Pelican Park is within a few minutes of these times. Source: Maritime Safety Queensland.</div>`;
+    el.hidden = false;
   }
 
   // Rain radar: RainViewer frames over a Leaflet map
