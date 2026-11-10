@@ -1,7 +1,7 @@
 """Download Queensland Government (MSQ) predicted high/low tides for Shorncliffe pier
 and write tides.json for the app. Times are AEST (UTC+10); heights are metres above LAT."""
 import csv, io, json, re, sys, urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 
 DATASET = "595d3eb3-3412-4a5d-ad2f-5071657128e0"  # Shorncliffe tide gauge, predicted high/low data
 API = "https://www.data.qld.gov.au/api/3/action/package_show?id=" + DATASET
@@ -11,13 +11,25 @@ def get(url):
     return urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=60).read()
 
 pkg = json.loads(get(API))["result"]
-year = datetime.utcnow().year
+year = datetime.now(timezone.utc).year
 wanted = [r for r in pkg["resources"] if r.get("format", "").lower() == "csv" and re.search(r"(%d|%d)" % (year, year + 1), (r.get("name") or "") + r.get("url", ""))]
 print("resources:", [(r.get("name"), r["url"]) for r in wanted])
 
 events = []
 for r in wanted:
     text = get(r["url"]).decode("utf-8-sig", "replace")
+    if not text.strip():
+        # The file download can come back empty for scripts; fall back to the CKAN datastore API
+        rows, offset = [], 0
+        while True:
+            res = json.loads(get(f"https://www.data.qld.gov.au/api/3/action/datastore_search?resource_id={r['id']}&limit=5000&offset={offset}"))["result"]
+            if offset == 0: print("fields:", [f["id"] for f in res["fields"]], "total:", res.get("total"))
+            recs = res["records"]
+            names = [f["id"] for f in res["fields"] if f["id"] != "_id"]
+            rows += [",".join(str(rec.get(n, "")) for n in names) for rec in recs]
+            offset += len(recs)
+            if not recs or offset >= res.get("total", 0): break
+        text = "\n".join(rows)
     lines = text.splitlines()
     print("----", r["url"], len(lines), "lines")
     for l in lines[:12]: print("HEAD|", l)
@@ -50,5 +62,5 @@ print("events:", len(out), out[:4], out[-2:])
 if len(out) < 100:
     sys.exit("Too few tide events parsed; leaving tides.json unchanged")
 json.dump({"station": "Shorncliffe pier", "source": "Maritime Safety Queensland predictions via data.qld.gov.au",
-           "tz": "+10:00", "datum": "LAT", "updated": datetime.utcnow().strftime("%Y-%m-%d"), "events": out},
+           "tz": "+10:00", "datum": "LAT", "updated": datetime.now(timezone.utc).strftime("%Y-%m-%d"), "events": out},
           open("tides.json", "w"), separators=(",", ":"))
